@@ -1,0 +1,442 @@
+# daily-recon.toml - Daily Reconnaissance Configuration Template
+# Place this in your target directory and customize as needed
+#
+# Usage:
+#   1. Copy to your target: cp templates/daily-recon.toml ~/bounty/TechCorp/
+#   2. Edit the file to customize tools, timeouts, notifications
+#   3. Set up cron: zolt schedule generate-cron --config daily-recon.toml
+#   4. Run manually: zolt schedule run --config daily-recon.toml
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCHEDULE CONFIGURATION
+# ──────────────────────────────────────────────────────────────────────────────
+# When and how often to run the reconnaissance
+# These values are for documentation; cron syntax is installed separately
+
+[schedule]
+# Enable/disable scheduling (does not affect manual runs)
+enabled = true
+
+# Frequency: daily, weekly, hourly, custom (for documentation only)
+frequency = "daily"
+
+# Time to run (24-hour format, UTC)
+time = "02:00"
+timezone = "UTC"
+
+# Cron expression alternative (takes precedence if set)
+# Examples:
+#   "0 2 * * *" = daily at 2 AM
+#   "0 */6 * * *" = every 6 hours
+#   "0 2 * * 0" = weekly on Sunday at 2 AM
+cron_expression = ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCOPE & TARGETS
+# ──────────────────────────────────────────────────────────────────────────────
+# Define what to scan and where to put results
+
+[scope]
+# File containing root domains to scan (one per line)
+# Example: techcorp.com, api.techcorp.com, *.techcorp.com
+target_file = "targets.txt"
+
+# Base directory for all output
+output_dir = "./recon"
+
+# Maximum number of tools to run simultaneously
+# Increase if you have more CPU/RAM, decrease if tools are getting OOM killed
+parallel_jobs = 3
+
+# ──────────────────────────────────────────────────────────────────────────────
+# WORKFLOW DEFINITION
+# ──────────────────────────────────────────────────────────────────────────────
+# Six-phase reconnaissance workflow with dependencies
+
+[workflow]
+
+# ─── Phase 1: Subdomain Enumeration (Passive) ────────────────────────────────
+[[workflow.phase]]
+id = "subdomain-enum"
+name = "Passive Subdomain Enumeration"
+description = "Discover subdomains without directly touching target"
+order = 1
+timeout_minutes = 30
+parallel_tools = true  # Run all tools simultaneously
+
+[[workflow.phase.tools]]
+name = "subfinder"
+enabled = true
+category = "passive"
+# Use template variables: {target_file}, {output_dir}, {date}
+command = "subfinder -dL {scope.target_file} -o {phase.output_dir}/subfinder-{date}.txt -silent"
+timeout_minutes = 15
+# Continue if this tool fails? (other tools in phase will still run)
+continue_on_failure = true
+
+[[workflow.phase.tools]]
+name = "amass"
+enabled = true
+category = "passive"
+command = "amass enum -df {scope.target_file} -o {phase.output_dir}/amass-{date}.txt -silent"
+timeout_minutes = 15
+continue_on_failure = true
+
+[[workflow.phase.tools]]
+name = "assetfinder"
+enabled = true
+category = "passive"
+command = "assetfinder -df {scope.target_file} | tee {phase.output_dir}/assetfinder-{date}.txt"
+timeout_minutes = 10
+continue_on_failure = true
+
+# Post-phase merge: combine all tool outputs
+[[workflow.phase.merge]]
+name = "all-subdomains"
+output = "recon/subdomains/all-{date}.txt"
+deduplicate = true
+sort = true
+# Delete source files after merge to save space
+delete_sources = false
+
+# ─── Phase 2: HTTP/HTTPS Probing ─────────────────────────────────────────────
+[[workflow.phase]]
+id = "probe-alive"
+name = "HTTP/HTTPS Probing"
+description = "Check which subdomains have active web services"
+order = 2
+timeout_minutes = 20
+# Wait for subdomain-enum to complete before starting
+depends_on = ["subdomain-enum"]
+parallel_tools = false  # Only one tool, but keeps pattern consistent
+
+[[workflow.phase.tools]]
+name = "httpx"
+enabled = true
+category = "http"
+# -json outputs JSON with metadata; -sc=status, -title=page title, -td=tech detection
+command = """
+httpx -l {depends_on.subdomain-enum.merge.output} \
+      -o {phase.output_dir}/alive-{date}.json \
+      -json -sc -title -td -pa -silent
+"""
+timeout_minutes = 20
+continue_on_failure = false  # This phase is critical
+
+# Extract plain URLs from JSON for next phases
+[[workflow.phase.extract]]
+name = "alive-urls"
+# jq extracts 'url' field from JSON output
+command = "cat {phase.output_dir}/alive-{date}.json | jq -r '.url' | sort -u > {phase.output_dir}/alive-{date}.txt"
+output = "recon/subdomains/alive-{date}.txt"
+
+# ─── Phase 3: Web Crawling & Spidering ───────────────────────────────────────
+[[workflow.phase]]
+id = "crawl-sites"
+name = "Web Crawling & Spidering"
+description = "Spider websites to discover endpoints"
+order = 3
+timeout_minutes = 30
+depends_on = ["probe-alive"]
+parallel_tools = true  # Run crawlers simultaneously
+
+[[workflow.phase.tools]]
+name = "katana"
+enabled = true
+category = "crawler"
+# -jc=js crawling, -jsl=js-lifecycle, -d=depth
+command = """
+katana -list {depends_on.probe-alive.extract.output} \
+       -o {phase.output_dir}/katana-{date}.txt \
+       -jc -jsl -d 3 -silent
+"""
+timeout_minutes = 30
+continue_on_failure = true
+
+[[workflow.phase.tools]]
+name = "gospider"
+enabled = true
+category = "crawler"
+# -q=quiet, --js=find js, --subs=include subdomains, --robots=robots.txt
+command = """
+gospider -S {depends_on.probe-alive.extract.output} \
+         -o {phase.output_dir}/gospider-{date}.txt \
+         -q --js --subs --robots --sitemap
+"""
+timeout_minutes = 25
+continue_on_failure = true
+
+[[workflow.phase.tools]]
+name = "waybackurls"
+enabled = true
+category = "crawler"
+command = """
+cat {depends_on.probe-alive.extract.output} | waybackurls \
+      > {phase.output_dir}/wayback-{date}.txt
+"""
+timeout_minutes = 15
+continue_on_failure = true
+
+[[workflow.phase.merge]]
+name = "all-urls"
+output = "recon/urls/all-{date}.txt"
+deduplicate = true
+sort = true
+# Exclude static assets
+remove_patterns = [
+    "\\.(jpg|png|gif|css|woff|woff2|ttf|svg|ico)$",
+    "\\.min\\.js$",
+    "\\/jquery.*\\.js$"
+]
+
+# ─── Phase 4: JavaScript Discovery ───────────────────────────────────────────
+[[workflow.phase]]
+id = "javascript"
+name = "JavaScript Discovery"
+description = "Find JavaScript files for analysis"
+order = 4
+timeout_minutes = 15
+depends_on = ["crawl-sites"]
+parallel_tools = false
+
+[[workflow.phase.tools]]
+name = "extract-js"
+enabled = true
+category = "javascript"
+# Extract JS URLs from crawled URLs
+command = """
+grep -E '\\.js$|\\.js\\?' {depends_on.crawl-sites.merge.output} \
+    | sort -u > {phase.output_dir}/files-{date}.txt
+"""
+timeout_minutes = 5
+continue_on_failure = true
+
+[[workflow.phase.tools]]
+name = "download-js"
+enabled = false  # Disabled by default, requires custom tool
+category = "javascript"
+description = "Download JS files for static analysis (requires custom tool)"
+command = """
+download-js-files -i {phase.output_dir}/files-{date}.txt \
+                    -d {phase.output_dir}/downloaded-{date}/ \
+                    -o {phase.output_dir}/download-{date}.log
+"""
+timeout_minutes = 10
+continue_on_failure = true
+
+# ─── Phase 5: Parameter Extraction ───────────────────────────────────────────
+[[workflow.phase]]
+id = "parameters"
+name = "Parameter Extraction"
+description = "Extract URL parameters for testing"
+order = 5
+timeout_minutes = 10
+depends_on = ["crawl-sites"]
+parallel_tools = false
+
+[[workflow.phase.tools]]
+name = "unfurl"
+enabled = true
+category = "parameter"
+# Extract parameter names from URLs
+command = """
+unfurl -u keys -i {depends_on.crawl-sites.merge.output} \
+       -o {phase.output_dir}/params-{date}.txt
+"""
+timeout_minutes = 5
+c
+continue_on_failure = true
+
+# ─── Phase 6: Diff Comparison ────────────────────────────────────────────────
+[comparison]
+enabled = true
+mode = "previous-day"  # Options: previous-day, previous-run, baseline
+
+# Create baseline if none exists (first run)
+create_baseline_if_missing = true
+
+# What constitutes a "significant change" for notifications
+notification_threshold_percent = 5  # Notify if >5% change
+
+# Track these files for changes
+[[comparison.track]]
+name = "subdomains"
+file = "recon/subdomains/all-{date}.txt"
+type = "subdomains"  # Determines how to normalize/compare
+history_dir = "recon/subdomains/history"
+store_history = true
+
+[[comparison.track]]
+name = "endpoints"
+file = "recon/subdomains/alive-{date}.txt"
+type = "endpoints"
+history_dir = "recon/subdomains/history"
+store_history = true
+
+[[comparison.track]]
+name = "urls"
+file = "recon/urls/all-{date}.txt"
+type = "urls"
+history_dir = "recon/urls/history"
+store_history = true
+
+[[comparison.track]]
+name = "javascript"
+file = "recon/js/files-{date}.txt"
+type = "javascript"
+history_dir = "recon/js/history"
+store_history = true
+
+[[comparison.track]]
+name = "parameters"
+file = "recon/urls/params-{date}.txt"
+type = "parameters"
+history_dir = "recon/params/history"
+store_history = true
+
+# ──────────────────────────────────────────────────────────────────────────────
+# NOTIFICATIONS
+# ──────────────────────────────────────────────────────────────────────────────
+# Get alerted when significant changes are detected
+
+[notification]
+enabled = false  # Set to true and configure webhooks to enable
+
+# When to send notifications
+on_change = true      # Send if files change above threshold
+on_failure = true      # Send if recon fails
+on_success = false     # Send summary every run (can be noisy)
+
+# Discord webhook configuration
+[notification.discord]
+webhook_url = "${DISCORD_WEBHOOK}"  # Use environment variable
+username = "Zolt Recon"
+avatar_url = ""
+# Only notify if change exceeds threshold
+threshold_percent = 5
+# Include top N new findings in message
+top_findings_limit = 5
+# Mention @here for significant changes
+mention_here_on_significant = true
+
+# Slack webhook configuration
+[notification.slack]
+webhook_url = "${SLACK_WEBHOOK}"
+channel = "#recon"
+username = "Zolt Recon"
+icon_emoji = ":robot_face:"
+threshold_percent = 5
+top_findings_limit = 5
+# Notify channel for significant changes
+notify_channel = false
+
+# Email configuration (optional)
+[notification.email]
+enabled = false
+smtp_server = "${SMTP_SERVER}"
+smtp_port = 587
+username = "${SMTP_USERNAME}"
+password = "${SMTP_PASSWORD}"
+from = "zolt-recon@example.com"
+to = ["${NOTIFICATION_EMAIL}"]
+subject_template = "Zolt Recon: {target} - {date}"
+threshold_percent = 5
+
+# ──────────────────────────────────────────────────────────────────────────────
+# REPORTS
+# ──────────────────────────────────────────────────────────────────────────────
+# Generate human-readable reports from recon data
+
+[report]
+enabled = true
+format = "markdown"  # Options: markdown, json, html
+output_dir = "logs/daily"
+filename_template = "recon-summary-{date}.md"
+
+# What to include in reports
+include_diffs = true           # Show what's new/changed
+include_metrics = true         # Show tool execution metrics
+include_recommendations = true # Show suggested next steps
+include_tool_output = false    # Include full tool output (can be huge)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PERFORMANCE & RESOURCE MANAGEMENT
+# ──────────────────────────────────────────────────────────────────────────────
+
+[performance]
+# Maximum tools to run at once (in same phase)
+max_concurrent_tools = 3
+
+# Retry failed tools
+retry_failed_tools = true
+retry_delay_seconds = 10
+max_retries = 1
+
+# Resource limits (abort if exceeded)
+memory_limit_mb = 2048  # 2GB
+max_runtime_minutes = 120  # 2 hours total
+
+# Disk space check
+disk_space_threshold_gb = 5  # Warn if < 5GB free
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LOGGING
+# ──────────────────────────────────────────────────────────────────────────────
+
+[logging]
+# Log level: debug, info, warn, error
+level = "info"
+
+# Where to save logs
+output_dir = "logs/daily"
+filename_template = "schedule-{date}.log"
+
+# Log rotation (prevents huge log files)
+max_size_mb = 100          # Rotate after 100MB
+retention_days = 30        # Keep logs for 30 days
+compress_after_days = 7    # Compress logs after 7 days
+
+# What to log
+log_tool_output = false    # Log stdout/stderr from tools (very verbose)
+log_commands = true        # Log commands being executed
+log_timing = true          # Log how long each phase takes
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ADVANCED CONFIGURATION
+# ──────────────────────────────────────────────────────────────────────────────
+# You usually don't need to change these
+
+[advanced]
+# Lock file location (prevents overlapping runs)
+lock_file = ".zolt/schedule.lock"
+
+# State file location (tracks last successful run)
+state_file = ".zolt/schedule-state.yml"
+
+# Pre/post workflow hooks
+# pre_workflow = "echo 'Starting recon'"
+# post_workflow = "echo 'Recon complete'"
+
+# Deduplication method for merge operations
+deduplication_method = "exact"  # Options: exact, domain-only
+
+# Use faster but less accurate deduplication for huge datasets
+fast_deduplication = false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TIPS & BEST PRACTICES
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# 1. Start small: Enable 2-3 tools per phase, add more as needed
+# 2. Watch timeouts: If tools timeout, increase timeout_minutes
+# 3. Monitor disk space: Historical data can accumulate over time
+# 4. Test notifications: Use `zolt notify test` to verify setup
+# 5. Review diffs daily: Focus on what's new, not the full dataset
+# 6. Adjust thresholds: Set notification_threshold based on target volatility
+# 7. Use environment variables: Keep secrets out of config files
+# 8. Customize for target: Add target-specific tools as needed
+#
+# Example target-specific addition:
+# [[workflow.phase.tools]]
+# name = "custom-tool"
+# command = "/path/to/custom-tool -t {scope.target_file}"

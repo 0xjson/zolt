@@ -1,0 +1,90 @@
+# quick-recon.toml - Quick Reconnaissance Template
+# Lightweight 3-phase reconnaissance for rapid results
+# Best for: Daily monitoring of already-scoped targets
+
+[metadata]
+name = "Quick Daily Recon"
+description = "Lightweight 3-phase reconnaissance"
+version = "1.0"
+
+[schedule]
+enabled = true
+frequency = "daily"
+time = "02:00"
+timezone = "UTC"
+cron_expression = ""
+
+[scope]
+target_file = "targets.txt"
+output_dir = "./recon"
+parallel_jobs = 2
+
+[workflow]
+
+# Phase 1: Fast subdomain enumeration
+[[workflow.phase]]
+id = "subdomains"
+name = "Fast Subdomain Enum"
+order = 1
+timeout_minutes = 15
+parallel_tools = true
+
+[[workflow.phase.tools]]
+name = "subfinder"
+enabled = true
+command = "subfinder -dL {scope.target_file} -o {phase.output_dir}/subfinder-{date}.txt -silent"
+timeout_minutes = 10
+
+# Phase 2: Probe alive
+[[workflow.phase]]
+id = "probe"
+name = "HTTP Probing"
+order = 2
+timeout_minutes = 10
+depends_on = ["subdomains"]
+
+[[workflow.phase.tools]]
+name = "httpx"
+enabled = true
+command = "httpx -l {depends_on.subdomains.merge.output} -o {phase.output_dir}/alive-{date}.json -json -sc -silent"
+timeout_minutes = 10
+
+[comparison]
+enabled = true
+mode = "previous-day"
+create_baseline_if_missing = true
+notification_threshold_percent = 10
+
+[[comparison.track]]
+file = "recon/subdomains/all-{date}.txt"
+type = "subdomains"
+history_dir = "recon/subdomains/history"
+
+[[comparison.track]]
+file = "recon/subdomains/alive-{date}.txt"
+type = "endpoints"
+history_dir = "recon/subdomains/history"
+
+[notification]
+enabled = false
+
+[report]
+enabled = true
+format = "markdown"
+output_dir = "logs/daily"
+filename_template = "recon-summary-{date}.md"
+include_diffs = true
+include_metrics = true
+include_recommendations = false
+
+[performance]
+max_concurrent_tools = 2
+retry_failed_tools = false
+max_runtime_minutes = 30
+
+[logging]
+level = "info"
+output_dir = "logs/daily"
+filename_template = "schedule-{date}.log"
+max_size_mb = 10
+retention_days = 7

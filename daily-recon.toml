@@ -1,0 +1,445 @@
+# Zolt Daily Reconnaissance Configuration
+# This file defines automated daily recon workflows for bug bounty hunting
+
+[metadata]
+name = "Daily Recon - TechCorp"
+version = "1.0"
+description = "Daily automated reconnaissance for bug bounty target"
+target = "techcorp.com"
+# Date format for output files: YYYY-MM-DD
+output_format = "{output_dir}/{step_name}_{date}.{extension}"
+
+# Global settings applied to all steps
+[global]
+threads = 50
+timeout = 10
+rate_limit = 150  # requests per second for rate-limited steps
+output_dir = "recon/daily"
+# Keep data from last N days (0 = keep forever)
+retention_days = 30
+# Send notifications when interesting changes detected
+notify_on_changes = true
+
+# ==========================================
+# STEP 1: Passive Subdomain Enumeration
+# ==========================================
+[steps.passive_subdomains]
+name = "Passive Subdomain Enumeration"
+enabled = true
+description = "Gather subdomains from passive sources without direct interaction"
+
+# Tools to run (in parallel where possible)
+[[steps.passive_subdomains.tools]]
+name = "subfinder"
+category = "passive"
+command = "subfinder"
+args = [
+    "-d", "{target}",
+    "-all",
+    "-nC",  # no color
+    "-o", "{output_dir}/subfinder_{date}.txt",
+    "-silent"
+]
+timeout_minutes = 30
+
+[[steps.passive_subdomains.tools]]
+name = "amass"
+category = "passive"
+command = "amass"
+args = [
+    "enum",
+    "-passive",
+    "-d", "{target}",
+    "-o", "{output_dir}/amass_{date}.txt",
+    "-nocolor"
+]
+timeout_minutes = 45
+max_memory_mb = 2048  # amass can be memory hungry
+
+[[steps.passive_subdomains.tools]]
+name = "assetfinder"
+category = "passive"
+command = "assetfinder"
+args = [
+    "--subs-only",
+    "{target}"
+]
+output_file = "{output_dir}/assetfinder_{date}.txt"
+timeout_minutes = 15
+
+# Merge all passive results
+[steps.passive_subdomains.merge]
+enabled = true
+strategy = "union"  # union, intersection, or append
+output_file = "{output_dir}/passive_subdomains_{date}.txt"
+# Remove duplicates and clean
+sanitize = true
+# Validate domain format
+validate_domains = true
+
+# ==========================================
+# STEP 2: Probe Alive HTTP/HTTPS
+# ==========================================
+[steps.probe_alive]
+name = "Probe for Live Hosts"
+enabled = true
+description = "Check which subdomains have active HTTP/HTTPS services"
+# Input from previous step
+input_file = "{output_dir}/passive_subdomains_{date}.txt"
+
+[[steps.probe_alive.tools]]
+name = "httpx"
+category = "active"
+command = "httpx"
+args = [
+    "-l", "{input_file}",
+    "-title",
+    "-tech-detect",
+    "-status-code",
+    "-content-length",
+    "-web-server",
+    "-follow-redirects",
+    "-random-agent",
+    "-timeout", "{global.timeout}",
+    "-threads", "{global.threads}",
+    "-rl", "{global.rate_limit}",
+    "-o", "{output_dir}/httpx_{date}.json",
+    "-json"
+]
+timeout_minutes = 60
+debug = false
+
+# Extract just the URLs from httpx output
+[[steps.probe_alive.post_process]]
+name = "extract_urls"
+script = """
+jq -r '.url' {output_dir}/httpx_{date}.json | sort -u > {output_dir}/alive_urls_{date}.txt
+"""
+
+[[steps.probe_alive.post_process]]
+name = "extract_ips"
+script = """
+jq -r '.host' {output_dir}/httpx_{date}.json | sort -u > {output_dir}/alive_ips_{date}.txt
+"""
+
+# ==========================================
+# STEP 3: Web Crawling/Spidering
+# ==========================================
+[steps.crawl]
+name = "Crawl Discovered Endpoints"
+enabled = true
+description = "Spider websites to discover endpoints and URLs"
+input_file = "{output_dir}/alive_urls_{date}.txt"
+
+[[steps.crawl.tools]]
+name = "katana"
+category = "spider"
+command = "katana"
+args = [
+    "-list", "{input_file}",
+    "-headless",  # use headless browser for JS rendering
+    "-timeout", "{global.timeout}",
+    "-threads", "{global.threads}",
+    "-concurrency", "20",
+    "-fetch-timeout", "5",
+    "-depth", "3",
+    "-js-crawl", true,
+    "-field-scope", "rdn",  # restrict to same root domain
+    "-silent",
+    "-output", "{output_dir}/katana_{date}.txt"
+]
+timeout_minutes = 120  # crawling can take a while
+# Max URLs to crawl per host
+max_urls_per_host = 1000
+
+[[steps.crawl.tools]]
+name = "gospider"
+category = "spider"
+command = "gospider"
+args = [
+    "-S", "{input_file}",
+    "-o", "{output_dir}/gospider_{date}",
+    "-t", "{global.threads}",
+    "-c", "20",  # concurrency
+    "-d", "3",   # depth
+    "--js",
+    "--sitemap",
+    "--robots",
+    "--quiet"
+]
+timeout_minutes = 90
+
+[steps.crawl.merge]
+enabled = true
+output_file = "{output_dir}/crawled_urls_{date}.txt"
+strategy = "union"
+# Keep only unique URLs, sorting by domain
+sort_by_domain = true
+
+# ==========================================
+# STEP 4: JavaScript Discovery
+# ==========================================
+[steps.js_discovery]
+name = "JavaScript File Discovery"
+enabled = true
+description = "Find JavaScript files from crawled URLs for analysis"
+input_file = "{output_dir}/crawled_urls_{date}.txt"
+
+[[steps.js_discovery.tools]]
+name = "extract_js"
+category = "parser"
+script = """
+# Extract JS files from crawled URLs
+grep -E '\.js(?:\?|$)' {input_file} | grep -v '\.json' | sort -u > {output_dir}/js_files_raw_{date}.txt
+
+# Also extract from katana JS file output if it exists
+if [ -f "recon/js/files.txt" ]; then
+    cat recon/js/files.txt >> {output_dir}/js_files_raw_{date}.txt
+fi
+"""
+output_file = "{output_dir}/js_files_raw_{date}.txt"
+
+# Download and analyze JavaScript files
+[[steps.js_discovery.tools]]
+name = "download_js"
+category = "downloader"
+command = "wget"
+args = [
+    "-i", "{output_dir}/js_files_raw_{date}.txt",
+    "-P", "recon/js/downloaded/{date}/",
+    "-q", "--timeout=10",
+    "--tries=2"
+]
+timeout_minutes = 30
+# Only download if less than 5000 JS files (avoid runaway)
+max_files = 5000
+
+# Run Linkfinder on JS files
+[[steps.js_discovery.tools]]
+name = "linkfinder"
+category = "analyzer"
+command = "python3"
+args = [
+    "/opt/tools/LinkFinder/linkfinder.py",
+    "-i", "recon/js/downloaded/{date}/",
+    "-o", "cli"
+]
+output_file = "{output_dir}/linkfinder_{date}.txt"
+timeout_minutes = 30
+
+# ==========================================
+# STEP 5: Parameter Extraction
+# ==========================================
+[steps.parameter_extraction]
+name = "Extract Parameters from URLs"
+enabled = true
+description = "Find parameters in URLs for further testing"
+input_file = "{output_dir}/crawled_urls_{date}.txt"
+
+[[steps.parameter_extraction.tools]]
+name = "extract_params"
+category = "parser"
+script = """
+# Extract URLs with parameters
+grep '?[^ ]' {input_file} | sort -u > {output_dir}/urls_with_params_{date}.txt
+
+# Use unfurl to extract parameters
+unfurl keys < {output_dir}/urls_with_params_{date}.txt | sort -u > {output_dir}/param_names_{date}.txt
+
+# Extract full parameter URLs grouped by parameter name
+while read param; do
+    echo "==== $param ====" >> {output_dir}/params_by_name_{date}.txt
+    grep "?$param" {output_dir}/urls_with_params_{date}.txt >> {output_dir}/params_by_name_{date}.txt
+done < {output_dir}/param_names_{date}.txt
+"""
+output_file = "{output_dir}/param_names_{date}.txt"
+
+# Arjun - Parameter discovery
+[[steps.parameter_extraction.tools]]
+name = "arjun"
+category = "active"
+command = "arjun"
+args = [
+    "-i", "{output_dir}/alive_urls_{date}.txt",
+    "-o", "{output_dir}/arjun_params_{date}.json",
+    "-oJ",
+    "-t", "30",  # threads
+    "-w", "parameters.txt"  # custom wordlist if available
+]
+timeout_minutes = 90
+# Only test top 100 URLs to avoid taking forever
+limit_urls = 100
+
+# ==========================================
+# STEP 6: Diff vs Yesterday
+# ==========================================
+[steps.diff_comparison]
+name = "Compare with Yesterday's Results"
+enabled = true
+description = "Find what's new or changed since yesterday"
+
+[[steps.diff_comparison.comparisons]]
+name = "new_subdomains"
+file_type = "subdomains"
+today_file = "{output_dir}/passive_subdomains_{date}.txt"
+# Yesterday's file (autodetected or specified)
+# Uses date from yesterday in same format
+output_file = "{output_dir}/diff/new_subdomains_{date}.txt"
+# Show only additions (not removals)
+show_additions = true
+show_removals = false
+# Notify if more than N new subdomains found
+notify_threshold = 5
+
+[[steps.diff_comparison.comparisons]]
+name = "new_alive_endpoints"
+file_type = "urls"
+today_file = "{output_dir}/alive_urls_{date}.txt"
+output_file = "{output_dir}/diff/new_alive_urls_{date}.txt"
+show_additions = true
+show_removals = false
+# Consider interesting changes
+notify_threshold = 10
+
+[[steps.diff_comparison.comparisons]]
+name = "new_javascript_files"
+file_type = "urls"
+today_file = "{output_dir}/js_files_raw_{date}.txt"
+output_file = "{output_dir}/diff/new_js_files_{date}.txt"
+show_additions = true
+show_removals = false
+notify_threshold = 3
+
+[[steps.diff_comparison.comparisons]]
+name = "new_parameters"
+file_type = "parameters"
+today_file = "{output_dir}/param_names_{date}.txt"
+output_file = "{output_dir}/diff/new_params_{date}.txt"
+show_additions = true
+show_removals = false
+notify_threshold = 10
+
+[[steps.diff_comparison.comparisons]]
+name = "new_crawled_paths"
+file_type = "urls"
+today_file = "{output_dir}/crawled_urls_{date}.txt"
+output_file = "{output_dir}/diff/new_crawled_{date}.txt"
+# Show context (new paths under same hosts)
+group_by_host = true
+show_additions = true
+show_removals = false
+notify_threshold = 20
+
+# Summary generation
+[steps.diff_comparison.summary]
+enabled = true
+output_file = "{output_dir}/diff/summary_{date}.md"
+format = "markdown"
+include_stats = true
+include_recommendations = true
+
+# ==========================================
+# NOTIFICATIONS
+# ==========================================
+[notifications]
+enabled = true
+# Trigger if any step finds something above its threshold
+min_threshold_for_notification = 1
+
+[[notifications.providers]]
+name = "slack"
+type = "slack_webhook"
+webhook_url = "${SLACK_WEBHOOK_URL}"
+channel = "#recon"
+# Only notify on significant findings
+minimum_severity = "medium"
+template = "slack.json"
+
+[[notifications.providers]]
+name = "discord"
+type = "discord_webhook"
+webhook_url = "${DISCORD_WEBHOOK_URL}"
+mention_on_high = true
+
+[[notifications.providers]]
+name = "email"
+type = "smtp"
+# Configured via environment variables
+# SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_TO
+subject = "[Recon] Daily Update - {target} - {date}"
+# Send summary as attachment
+attach_summary = true
+
+# ==========================================
+# REPORTING
+# ==========================================
+[reporting]
+enabled = true
+
+[reporting.daily_summary]
+output_file = "{output_dir}/reports/daily_{date}.html"
+format = "html"
+include_charts = true
+# Include these sections
+sections = ["subdomains", "alive_endpoints", "js_files", "parameters", "crawled_urls"]
+
+[reporting.weekly_summary]
+enabled = true
+output_file = "recon/reports/weekly_{week}.html"
+format = "html"
+# Aggregate daily data
+aggregate_days = 7
+
+# ==========================================
+# ADVANCED SETTINGS
+# ==========================================
+[performance]
+# Resource limits
+max_concurrent_steps = 2  # Run 2 steps at a time
+max_memory_mb = 4096
+max_disk_gb = 50
+# Stop if memory exceeds this (prevent system issues)
+omit_on_low_memory = ["amass"]  # Skip memory-heavy tools when low on RAM
+
+[error_handling]
+# What to do when a tool fails
+on_tool_failure = "continue"  # continue, stop, or skip_step
+max_retries = 2
+# Log failures for later investigation
+log_failures = true
+failure_log = "{output_dir}/logs/failures_{date}.log"
+
+[rate_limiting]
+# Custom rate limits per provider
+# Some APIs have daily quotas
+[rate_limiting.providers.rapidapi]
+daily_quota = 1000
+strategy = "delay"  # delay when approaching limit
+
+[rate_limiting.providers.whoisxmlapi]
+daily_quota = 500
+strategy = "stop"  # stop when limit reached
+
+# ==========================================
+# TARGET-SPECIFIC CONFIGURATIONS
+# ==========================================
+# You can override settings for specific targets
+
+[targets.techcorp.com]
+# Use more intensive recon for high-value targets
+steps.passive_subdomains.tools.subfinder.args = [
+    "-d", "techcorp.com",
+    "-all",
+    "-recursive",  # More intensive
+    "-nC",
+    "-oJ",  # JSON output
+    "-o", "{output_dir}/subfinder_{date}.json",
+    "-silent"
+]
+steps.crawl.tools.katana.args.depth = 5  # Deeper crawling
+steps.parameter_extraction.tools.arjun.limit_urls = 500  # Test more URLs
+
+[targets.blog.techcorp.com]
+# Less aggressive for low-priority subdomains
+steps.probe_alive.enabled = false  # Skip probing
+steps.crawl.tools.katana.args.depth = 2

@@ -1,0 +1,252 @@
+# comprehensive-recon.toml - Comprehensive Reconnaissance Template
+# Full 6-phase reconnaissance with vulnerability scanning
+# Best for: Initial target assessment or deep dives
+
+[metadata]
+name = "Comprehensive Recon"
+description = "Full reconnaissance with vulnerability scanning"
+version = "1.0"
+
+[schedule]
+enabled = false  # Usually run manually, not on cron
+frequency = "weekly"
+time = "02:00"
+timezone = "UTC"
+
+[scope]
+target_file = "targets.txt"
+output_dir = "./recon"
+parallel_jobs = 3
+
+[workflow]
+
+# Phase 1: Passive subdomain enumeration (extended sources)
+[[workflow.phase]]
+id = "subdomain-enum"
+name = "Passive Subdomain Enumeration"
+order = 1
+timeout_minutes = 30
+parallel_tools = true
+
+[[workflow.phase.tools]]
+name = "subfinder"
+enabled = true
+command = "subfinder -dL {scope.target_file} -o {phase.output_dir}/subfinder-{date}.txt -silent"
+timeout_minutes = 15
+
+[[workflow.phase.tools]]
+name = "amass"
+enabled = true
+command = "amass enum -passive -df {scope.target_file} -o {phase.output_dir}/amass-{date}.txt -silent"
+timeout_minutes = 15
+
+[[workflow.phase.tools]]
+name = "assetfinder"
+enabled = true
+command = "assetfinder -df {scope.target_file} | tee {phase.output_dir}/assetfinder-{date}.txt"
+timeout_minutes = 10
+
+[[workflow.phase.tools]]
+name = "sublist3r"
+enabled = true
+command = "sublist3r -d {scope.target_file} -o {phase.output_dir}/sublist3r-{date}.txt"
+timeout_minutes = 10
+
+[[workflow.phase.merge]]
+name = "all-subdomains"
+output = "recon/subdomains/all-{date}.txt"
+deduplicate = true
+sort = true
+
+# Phase 2: Probe alive
+[[workflow.phase]]
+id = "probe-alive"
+name = "HTTP Probing"
+order = 2
+timeout_minutes = 20
+depends_on = ["subdomain-enum"]
+
+[[workflow.phase.tools]]
+name = "httpx"
+enabled = true
+command = "httpx -l {depends_on.subdomain-enum.merge.output} -o {phase.output_dir}/alive-{date}.json -json -sc -title -td -pa -silent"
+timeout_minutes = 20
+
+[[workflow.phase.extract]]
+command = "cat {phase.output_dir}/alive-{date}.json | jq -r '.url' | sort -u > {phase.output_dir}/alive-{date}.txt"
+output = "recon/subdomains/alive-{date}.txt"
+
+# Phase 3: Port scanning
+[[workflow.phase]]
+id = "port-scan"
+name = "Port Scanning"
+order = 3
+depends_on = ["subdomain-enum"]
+
+[[workflow.phase.tools]]
+name = "naabu"
+enabled = true
+command = "naabu -l {depends_on.subdomain-enum.merge.output} -p 21,22,23,25,53,80,443,445,5000,7000,8000-9000 -o {phase.output_dir}/open-{date}.txt -silent"
+timeout_minutes = 30
+
+# Phase 4: Web crawling
+[[workflow.phase]]
+id = "crawl-sites"
+name = "Web Crawling"
+order = 4
+timeout_minutes = 30
+depends_on = ["probe-alive"]
+parallel_tools = true
+
+[[workflow.phase.tools]]
+name = "katana"
+enabled = true
+command = "katana -list {depends_on.probe-alive.extract.output} -o {phase.output_dir}/katana-{date}.txt -jc -jsl -d 3 -silent"
+timeout_minutes = 30
+
+[[workflow.phase.tools]]
+name = "gospider"
+enabled = true
+command = "gospider -S {depends_on.probe-alive.extract.output} -o {phase.output_dir}/gospider-{date}.txt -q --js --subs --robots --sitemap"
+timeout_minutes = 25
+
+[[workflow.phase.tools]]
+name = "waybackurls"
+enabled = true
+command = "cat {depends_on.probe-alive.extract.output} | waybackurls > {phase.output_dir}/wayback-{date}.txt"
+timeout_minutes = 15
+
+[[workflow.phase.tools]]
+name = "gau"
+enabled = true
+command = "cat {depends_on.probe-alive.extract.output} | gau > {phase.output_dir}/gau-{date}.txt"
+timeout_minutes = 15
+
+[[workflow.phase.merge]]
+name = "all-urls"
+output = "recon/urls/all-{date}.txt"
+deduplicate = true
+sort = true
+
+# Phase 5: Technology identification
+[[workflow.phase]]
+id = "tech-id"
+name = "Technology Identification"
+order = 5
+timeout_minutes = 10
+depends_on = ["probe-alive"]
+
+[[workflow.phase.tools]]
+name = "wappalyzer"
+enabled = true
+command = "cat {depends_on.probe-alive.extract.output} | wappalyzer > {phase.output_dir}/tech-{date}.json"
+timeout_minutes = 10
+
+# Phase 6: JavaScript discovery
+[[workflow.phase]]
+id = "javascript"
+name = "JavaScript Discovery"
+order = 6
+timeout_minutes = 15
+depends_on = ["crawl-sites"]
+
+[[workflow.phase.tools]]
+name = "extract-js"
+enabled = true
+command = "grep -E '\\.js$|\\.js\\?' {depends_on.crawl-sites.merge.output} | sort -u > {phase.output_dir}/files-{date}.txt"
+timeout_minutes = 5
+
+# Phase 7: Parameter extraction
+[[workflow.phase]]
+id = "parameters"
+name = "Parameter Extraction"
+order = 7
+timeout_minutes = 10
+depends_on = ["crawl-sites"]
+
+[[workflow.phase.tools]]
+name = "unfurl"
+enabled = true
+command = "unfurl -u keys -i {depends_on.crawl-sites.merge.output} -o {phase.output_dir}/params-{date}.txt"
+timeout_minutes = 5
+
+# Phase 8: Vulnerability scanning
+[[workflow.phase]]
+id = "vuln-scan"
+name = "Vulnerability Scanning"
+order = 8
+timeout_minutes = 60
+depends_on = ["probe-alive"]
+
+[[workflow.phase.tools]]
+name = "nuclei"
+enabled = true
+command: """
+nuclei -l {depends_on.probe-alive.extract.output} \
+       -o {phase.output_dir}/vulnerabilities-{date}.txt \
+       -s critical,high,medium \
+       -silent
+"""
+timeout_minutes = 45
+
+[[workflow.phase.tools]]
+name = "nikto"
+enabled = false
+command: """
+nikto -h {depends_on.probe-alive.extract.output} \
+      -o {phase.output_dir}/nikto-{date}.html
+"""
+timeout_minutes = 30
+
+[comparison]
+enabled = true
+mode = "previous-run"
+create_baseline_if_missing = true
+notification_threshold_percent = 3
+
+[[comparison.track]]
+file = "recon/subdomains/all-{date}.txt"
+type = "subdomains"
+history_dir = "recon/subdomains/history"
+
+[[comparison.track]]
+file = "recon/subdomains/alive-{date}.txt"
+type = "endpoints"
+history_dir = "recon/subdomains/history"
+
+[[comparison.track]]
+file = "recon/urls/all-{date}.txt"
+type = "urls"
+history_dir = "recon/urls/history"
+
+[[comparison.track]]
+file = "recon/ports/open-{date}.txt"
+type = "ports"
+history_dir = "recon/ports/history"
+
+[notification]
+enabled = false
+
+[report]
+enabled = true
+format = "html"
+output_dir = "logs/comprehensive"
+filename_template = "recon-report-{date}.html"
+include_diffs = true
+include_metrics = true
+include_recommendations = true
+
+[performance]
+max_concurrent_tools = 3
+retry_failed_tools = true
+retry_delay_seconds = 10
+max_runtime_minutes = 180
+memory_limit_mb = 4096
+disk_space_threshold_gb = 10
+
+[logging]
+level = "info"
+output_dir = "logs/comprehensive"
+filename_template = "schedule-{date}.log"
+max_size_mb = 500
+retention_days = 90
