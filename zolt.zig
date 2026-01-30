@@ -26,19 +26,24 @@ const usage =
     \\    -w, --wildcard-subdomains <file> File containing subdomains
     \\
     \\@actuallyzolt zolt v0.1.0
-    \\;
+;
 
-pub fn main(init: std.process.Init.Minimal) u8 {
+pub fn main() u8 {
     const allocator = std.heap.page_allocator;
 
-    // Convert args to slice for easier handling
-    const args_count = init.args.vector.len;
-    if (args_count < 2) {
+    // Parse args using 0.15.2 API
+    var args = std.process.argsAlloc(allocator) catch {
+        std.debug.print("Failed to parse args\n", .{});
+        return 1;
+    };
+    defer std.process.argsFree(allocator, args);
+
+    if (args.len < 2) {
         std.debug.print(usage, .{});
         return 0;
     }
 
-    const command = std.mem.sliceTo(init.args.vector[1], 0);
+    const command = args[1];
 
     if (std.mem.eql(u8, command, "tools")) {
         // Existing tools command logic
@@ -146,8 +151,18 @@ pub fn main(init: std.process.Init.Minimal) u8 {
                     return 1;
                 };
             },
+            .monitor => {
+                const opts = parseRunOptions(allocator, args_list[0..count]) catch {
+                    return 1;
+                };
+                schedule_cmd.monitorWorkflow(allocator, opts) catch |err| {
+                    std.debug.print("Error: {}\n", .{err});
+                    cli.printError("failed to monitor workflow", .{});
+                    return 1;
+                };
+            },
             .diff => {
-                const opts = parseQueryOptions(allocator, args_list[0..count]) catch {
+                const opts = parseRunOptions(allocator, args_list[0..count]) catch {
                     return 1;
                 };
                 schedule_cmd.showDiff(allocator, opts) catch {
@@ -156,7 +171,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
                 };
             },
             .logs => {
-                const opts = parseQueryOptions(allocator, args_list[0..count]) catch {
+                const opts = parseRunOptions(allocator, args_list[0..count]) catch {
                     return 1;
                 };
                 schedule_cmd.showLogs(allocator, opts) catch {
@@ -165,7 +180,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
                 };
             },
             .report => {
-                const opts = parseQueryOptions(allocator, args_list[0..count]) catch {
+                const opts = parseRunOptions(allocator, args_list[0..count]) catch {
                     return 1;
                 };
                 schedule_cmd.generateReport(allocator, opts) catch {
@@ -274,4 +289,144 @@ fn replaceSpacesWithUnderscores(allocator: std.mem.Allocator, input: []const u8)
         }
     }
     return result;
+}
+
+/// Parse generate-cron command options
+fn parseGenerateCronOptions(_: std.mem.Allocator, args: []const []const u8) !schedule_cmd.GenerateCronOptions {
+    var options = schedule_cmd.GenerateCronOptions{
+        .config_file = "",
+        .frequency = "daily",
+        .time = "02:00",
+        .timezone = "UTC",
+    };
+
+    var config_set = false;
+    var i: usize = 0;
+
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+
+        if (std.mem.eql(u8, arg, "--config")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--config requires a file path", .{});
+                std.process.exit(1);
+            }
+            options.config_file = args[i + 1];
+            i += 1;
+            config_set = true;
+        } else if (std.mem.eql(u8, arg, "--frequency")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--frequency requires a value", .{});
+                std.process.exit(1);
+            }
+            options.frequency = args[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--time")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--time requires a time value", .{});
+                std.process.exit(1);
+            }
+            options.time = args[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--timezone")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--timezone requires a timezone", .{});
+                std.process.exit(1);
+            }
+            options.timezone = args[i + 1];
+            i += 1;
+        } else {
+            cli.printError("unknown option '{s}'", .{arg});
+            schedule_cmd.printUsage();
+            std.process.exit(1);
+        }
+    }
+
+    if (!config_set) {
+        cli.printError("--config <file> is required", .{});
+        std.process.exit(1);
+    }
+
+    return options;
+}
+
+/// Parse install command options
+fn parseInstallOptions(_: std.mem.Allocator, args: []const []const u8) !schedule_cmd.InstallOptions {
+    var options = schedule_cmd.InstallOptions{
+        .config_file = "",
+        .dry_run = false,
+    };
+
+    var config_set = false;
+    var i: usize = 0;
+
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+
+        if (std.mem.eql(u8, arg, "--config")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--config requires a file path", .{});
+                std.process.exit(1);
+            }
+            options.config_file = args[i + 1];
+            i += 1;
+            config_set = true;
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            options.dry_run = true;
+        } else {
+            cli.printError("unknown option '{s}'", .{arg});
+            schedule_cmd.printUsage();
+            std.process.exit(1);
+        }
+    }
+
+    if (!config_set) {
+        cli.printError("--config <file> is required", .{});
+        std.process.exit(1);
+    }
+
+    return options;
+}
+
+/// Parse run command options
+fn parseRunOptions(_: std.mem.Allocator, args: []const []const u8) !schedule_cmd.RunOptions {
+    var options = schedule_cmd.RunOptions{
+        .config_file = "",
+        .phase = null,
+    };
+
+    var config_set = false;
+    var i: usize = 0;
+
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+
+        if (std.mem.eql(u8, arg, "--config")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--config requires a file path", .{});
+                std.process.exit(1);
+            }
+            options.config_file = args[i + 1];
+            i += 1;
+            config_set = true;
+        } else if (std.mem.eql(u8, arg, "--phase")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--phase requires a phase name", .{});
+                std.process.exit(1);
+            }
+            options.phase = args[i + 1];
+            i += 1;
+        } else {
+            cli.printError("unknown option '{s}'", .{arg});
+            schedule_cmd.printUsage();
+            std.process.exit(1);
+        }
+    }
+
+    if (!config_set) {
+        cli.printError("--config <file> is required", .{});
+        std.process.exit(1);
+    }
+
+    return options;
 }

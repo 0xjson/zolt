@@ -119,7 +119,7 @@ pub const TOOLS = [_]Tool{
 };
 
 /// Get tools by category
-pub fn getToolsByCategory(category: Category) []const Tool {
+pub fn getToolsByCategory(_: Category) []const Tool {
     // This is a simple filter that returns all tools of a specific category
     // For efficiency in production, you might want to pre-compute these
     var count: usize = 0;

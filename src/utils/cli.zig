@@ -150,7 +150,7 @@ pub const Progress = struct {
         std.debug.print("\rProgress: {d:.0}% ({d}/{d})", .{ percentage, self.current, self.total });
     }
 
-    pub fn finish(self: *Progress) void {
+    pub fn finish(_: *Progress) void {
         std.debug.print("\n", .{});
     }
 };

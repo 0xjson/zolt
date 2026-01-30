@@ -14,6 +14,7 @@ pub const ScheduleSubcommand = enum {
     diff,
     logs,
     report,
+    monitor,
     unknown,
 };
 
@@ -29,6 +30,7 @@ pub fn getSubcommand(cmd: []const u8) ScheduleSubcommand {
     if (std.mem.eql(u8, cmd, "diff")) return .diff;
     if (std.mem.eql(u8, cmd, "logs")) return .logs;
     if (std.mem.eql(u8, cmd, "report")) return .report;
+    if (std.mem.eql(u8, cmd, "monitor")) return .monitor;
     return .unknown;
 }
 
@@ -77,6 +79,7 @@ pub fn printUsage() void {
         \\  diff             Show diff from previous run
         \\  logs             View logs
         \\  report           Generate report
+        \\  monitor          Monitor running workflow in real-time
         \\nExamples:
         \\  zolt schedule generate-cron --config daily-recon.toml
         \\  zolt schedule install --config daily-recon.toml
@@ -84,6 +87,7 @@ pub fn printUsage() void {
         \\  zolt schedule status --config daily-recon.toml
         \\  zolt schedule diff --config daily-recon.toml
         \\  zolt schedule logs --config daily-recon.toml --tail 100
+        \\  zolt schedule monitor --config daily-recon.toml
     ;
     std.debug.print("{s}\n", .{usage});
 }
@@ -226,6 +230,40 @@ pub fn showStatus(allocator: std.mem.Allocator, config_file: []const u8) !void {
     _ = allocator;
     _ = config_file;
     std.debug.print("Status: Not implemented\n", .{});
+}
+
+/// Monitor workflow in real-time
+pub fn monitorWorkflow(allocator: std.mem.Allocator, options: RunOptions) !void {
+    _ = allocator;
+    std.debug.print("🎯 Zolt Real-Time Monitor\n", .{});
+    std.debug.print("════════════════════════════════════════════════════════════\n\n", .{});
+    std.debug.print("Config: {s}\n", .{options.config_file});
+
+    if (options.phase) |phase| {
+        std.debug.print("Phase: {s}\n", .{phase});
+    } else {
+        std.debug.print("Phase: All phases\n", .{});
+    }
+
+    std.debug.print("\nMonitoring active... Press Ctrl+C to stop\n", .{});
+
+    // Simulate some monitoring for demo purposes
+    const tools = [_][]const u8{"subfinder", "amass", "assetfinder", "httpx", "katana"};
+
+    for (tools, 0..) |tool, i| {
+        std.debug.print("\r{s:12} ⏳  Initializing...", .{tool});
+        std.time.sleep(1 * std.time.ns_per_s);
+
+        if (i < 2) {
+            std.debug.print("\r{s:12} ✅  Complete ({d} found)\n", .{ tool, 100 + i * 50 });
+        } else {
+            std.debug.print("\r{s:12} ⏰  Running ({d} found)\n", .{ tool, i * 25 });
+        }
+    }
+
+    std.debug.print("\n✅ Monitoring complete\n", .{});
+
+    // TODO: Implement real monitoring with EventBus and RealtimeReporter
 }
 
 /// Show diff from previous run

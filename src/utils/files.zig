@@ -13,7 +13,7 @@ pub fn createDirectory(path: []const u8) !void {
 }
 
 /// Write content to a file
-pub fn writeFile(allocator: std.mem.Allocator, path: []const u8, content: []const u8) !void {
+pub fn writeFile(_: std.mem.Allocator, path: []const u8, content: []const u8) !void {
     const file = try std.fs.cwd().createFile(path, .{});
     defer file.close();
 
