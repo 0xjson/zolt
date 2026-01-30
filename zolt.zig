@@ -32,7 +32,7 @@ pub fn main() u8 {
     const allocator = std.heap.page_allocator;
 
     // Parse args using 0.15.2 API
-    var args = std.process.argsAlloc(allocator) catch {
+    const args = std.process.argsAlloc(allocator) catch {
         std.debug.print("Failed to parse args\n", .{});
         return 1;
     };
@@ -47,7 +47,7 @@ pub fn main() u8 {
 
     if (std.mem.eql(u8, command, "tools")) {
         // Existing tools command logic
-        if (args_count < 3 or !std.mem.eql(u8, std.mem.sliceTo(init.args.vector[2], 0), "install")) {
+        if (args.len < 3 or !std.mem.eql(u8, args[2], "install")) {
             cli.printError("tools expects a subcommand (install)", .{});
             std.debug.print(usage, .{});
             return 1;
@@ -56,7 +56,7 @@ pub fn main() u8 {
         tools_cmd.install(allocator);
     } else if (std.mem.eql(u8, command, "init")) {
         // Parse options from args[2..]
-        if (args_count < 4) {
+        if (args.len < 4) {
             cli.printError("init requires options (-o, -c)", .{});
             std.debug.print(usage, .{});
             return 1;
@@ -66,9 +66,9 @@ pub fn main() u8 {
         var args_list: [100][]const u8 = undefined;
         var count: usize = 0;
 
-        for (2..args_count) |i| {
+        for (2..args.len) |i| {
             if (count >= 100) break;
-            args_list[count] = std.mem.sliceTo(init.args.vector[i], 0);
+            args_list[count] = args[i];
             count += 1;
         }
 
@@ -80,20 +80,20 @@ pub fn main() u8 {
         init_cmd.initialize(allocator, options);
     } else if (std.mem.eql(u8, command, "schedule")) {
         // New schedule command from subagent designs
-        if (args_count < 3) {
+        if (args.len < 3) {
             schedule_cmd.printUsage();
             return 1;
         }
 
-        const subcommand = schedule_cmd.getSubcommand(std.mem.sliceTo(init.args.vector[2], 0));
+        const subcommand = schedule_cmd.getSubcommand(args[2]);
 
         // Build args slice starting from index 3 for subcommand parsing
         var args_list: [100][]const u8 = undefined;
         var count: usize = 0;
 
-        for (3..args_count) |i| {
+        for (3..args.len) |i| {
             if (count >= 100) break;
-            args_list[count] = std.mem.sliceTo(init.args.vector[i], 0);
+            args_list[count] = args[i];
             count += 1;
         }
 
@@ -162,7 +162,7 @@ pub fn main() u8 {
                 };
             },
             .diff => {
-                const opts = parseRunOptions(allocator, args_list[0..count]) catch {
+                const opts = parseQueryOptions(allocator, args_list[0..count]) catch {
                     return 1;
                 };
                 schedule_cmd.showDiff(allocator, opts) catch {
@@ -171,7 +171,7 @@ pub fn main() u8 {
                 };
             },
             .logs => {
-                const opts = parseRunOptions(allocator, args_list[0..count]) catch {
+                const opts = parseQueryOptions(allocator, args_list[0..count]) catch {
                     return 1;
                 };
                 schedule_cmd.showLogs(allocator, opts) catch {
@@ -180,7 +180,7 @@ pub fn main() u8 {
                 };
             },
             .report => {
-                const opts = parseRunOptions(allocator, args_list[0..count]) catch {
+                const opts = parseQueryOptions(allocator, args_list[0..count]) catch {
                     return 1;
                 };
                 schedule_cmd.generateReport(allocator, opts) catch {
@@ -416,6 +416,63 @@ fn parseRunOptions(_: std.mem.Allocator, args: []const []const u8) !schedule_cmd
             }
             options.phase = args[i + 1];
             i += 1;
+        } else {
+            cli.printError("unknown option '{s}'", .{arg});
+            schedule_cmd.printUsage();
+            std.process.exit(1);
+        }
+    }
+
+    if (!config_set) {
+        cli.printError("--config <file> is required", .{});
+        std.process.exit(1);
+    }
+
+    return options;
+}
+
+/// Parse query command options (for diff/logs/report)
+fn parseQueryOptions(_: std.mem.Allocator, args: []const []const u8) !schedule_cmd.QueryOptions {
+    var options = schedule_cmd.QueryOptions{
+        .config_file = "",
+        .date = null,
+        .tail = 50,
+        .follow = false,
+    };
+
+    var config_set = false;
+    var i: usize = 0;
+
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+
+        if (std.mem.eql(u8, arg, "--config")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--config requires a file path", .{});
+                std.process.exit(1);
+            }
+            options.config_file = args[i + 1];
+            i += 1;
+            config_set = true;
+        } else if (std.mem.eql(u8, arg, "--date")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--date requires a date value", .{});
+                std.process.exit(1);
+            }
+            options.date = args[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--tail")) {
+            if (i + 1 >= args.len) {
+                cli.printError("--tail requires a number", .{});
+                std.process.exit(1);
+            }
+            options.tail = std.fmt.parseUnsigned(u32, args[i + 1], 10) catch |err| {
+                cli.printError("invalid tail value: {}", .{err});
+                std.process.exit(1);
+            };
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--follow")) {
+            options.follow = true;
         } else {
             cli.printError("unknown option '{s}'", .{arg});
             schedule_cmd.printUsage();

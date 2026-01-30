@@ -110,8 +110,8 @@ pub fn generateCron(allocator: std.mem.Allocator, options: GenerateCronOptions) 
     defer if (std.mem.eql(u8, options.frequency, "daily") or std.mem.eql(u8, options.frequency, "weekly")) allocator.free(cron_time);
 
     // Get current directory
-    const cwd = try std.process.getCwd(allocator);
-    defer allocator.free(cwd);
+    var cwd_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd = try std.process.getCwd(&cwd_buffer);
 
     // Generate cron entry
     std.debug.print("# Zolt Daily Recon\n", .{});
@@ -148,8 +148,7 @@ pub fn installCron(allocator: std.mem.Allocator, options: InstallOptions) !void 
     defer allocator.free(crontab_result.stderr);
 
     // Create temp file with new cron entry
-    const temp_file = "/tmp/zolt-cron-XXXXXX";
-    _ = std.os.linux.mkstemp(temp_file);
+    const temp_file = "/tmp/zolt-cron";
 
     // Write current crontab
     var file = std.fs.cwd().createFile(temp_file, .{}) catch {
@@ -197,7 +196,7 @@ pub fn listCron(allocator: std.mem.Allocator) !void {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    var lines = std.mem.split(u8, result.stdout, "\n");
+    var lines = std.mem.splitAny(u8, result.stdout, "\n");
     var found = false;
     while (lines.next()) |line| {
         if (std.mem.indexOf(u8, line, "zolt")) |_| {
@@ -252,7 +251,7 @@ pub fn monitorWorkflow(allocator: std.mem.Allocator, options: RunOptions) !void 
 
     for (tools, 0..) |tool, i| {
         std.debug.print("\r{s:12} ⏳  Initializing...", .{tool});
-        std.time.sleep(1 * std.time.ns_per_s);
+        std.Thread.sleep(1 * std.time.ns_per_s);
 
         if (i < 2) {
             std.debug.print("\r{s:12} ✅  Complete ({d} found)\n", .{ tool, 100 + i * 50 });
