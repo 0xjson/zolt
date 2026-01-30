@@ -19,7 +19,7 @@ Get from zero to automated recon in under 10 minutes:
 
 ```bash
 # 1. Install zolt (requires Zig 0.16.0+)
-git clone https://github.com/actuallyzolt/zolt.git
+git clone https://github.com/0xjson/zolt.git
 cd zolt && zig build-exe zolt.zig && sudo mv zolt /usr/local/bin/
 
 # 2. Install 15+ bug bounty tools
@@ -68,7 +68,7 @@ zolt schedule diff --config daily-recon.toml
 
 ```bash
 # Clone zolt
-git clone https://github.com/actuallyzolt/zolt.git
+git clone https://github.com/0xjson/zolt.git
 cd zolt
 
 # Build
@@ -840,10 +840,10 @@ A: Yes! See examples/docker-setup.md
 
 ## Getting Help
 
-- **Documentation**: https://github.com/actuallyzolt/zolt
+- **Documentation**: https://github.com/0xjson/zolt
 - **Issues**: Create an issue on GitHub
 - **Discord**: (community link)
-- **Twitter**: @actuallyzolt
+- **X/Twitter**: @Jhannnnnnnn (https://x.com/Jhannnnnnnn)
 
 **Debug Mode:**
 ```bash

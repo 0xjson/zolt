@@ -5,14 +5,14 @@
   <p>Turn recon from hours of manual work into a 10-minute morning routine</p>
 
   <p>
-    <a href="https://github.com/actuallyzolt/zolt/actions">
-      <img src="https://img.shields.io/github/workflow/status/actuallyzolt/zolt/CI?style=flat-square" alt="CI">
+    <a href="https://github.com/0xjson/zolt/actions">
+      <img src="https://img.shields.io/github/workflow/status/0xjson/zolt/CI?style=flat-square" alt="CI">
     </a>
     <a href="https://opensource.org/licenses/MIT">
       <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License">
     </a>
-    <a href="https://github.com/actuallyzolt/zolt/releases">
-      <img src="https://img.shields.io/github/v/release/actuallyzolt/zolt?style=flat-square" alt="Release">
+    <a href="https://github.com/0xjson/zolt/releases">
+      <img src="https://img.shields.io/github/v/release/0xjson/zolt?style=flat-square" alt="Release">
     </a>
     <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-blue?style=flat-square" alt="Platform">
   </p>
@@ -209,7 +209,7 @@ Zolt manages and orchestrates these industry-standard tools:
 - **unfurl** - URL analysis and parameter extraction
 - **qsreplace** - Query string replacement for testing
 
-**Don't see your favorite tool?** [Request it](https://github.com/actuallyzolt/zolt/issues)
+**Don't see your favorite tool?** [Request it](https://github.com/0xjson/zolt/issues)
 
 ---
 
@@ -267,7 +267,7 @@ We love community contributions!
 
 ### Quick Ways to Contribute
 
-- **Report bugs** - [Open an issue](https://github.com/actuallyzolt/zolt/issues)
+- **Report bugs** - [Open an issue](https://github.com/0xjson/zolt/issues)
 - **Suggest features** - What would make your recon easier?
 - **Add tools** - Edit `src/registry/tools.zig`
 - **Improve docs** - Fix typos, add examples
@@ -310,9 +310,9 @@ Built with inspiration from:
 
 ## 📞 Support
 
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/actuallyzolt/zolt/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/actuallyzolt/zolt/discussions)
-- 🐦 **Updates**: [@actuallyzolt](https://twitter.com/actuallyzolt)
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/0xjson/zolt/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/0xjson/zolt/discussions)
+- 🐦 **Updates**: [@Jhannnnnnnn](https://x.com/Jhannnnnnnn)
 
 ---
 

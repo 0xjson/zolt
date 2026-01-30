@@ -25,7 +25,7 @@ const usage =
     \\    -c, --company <name>         Company name
     \\    -w, --wildcard-subdomains <file> File containing subdomains
     \\
-    \\@actuallyzolt zolt v0.1.0
+    \\@0xjson zolt v0.1.0
 ;
 
 pub fn main() u8 {
